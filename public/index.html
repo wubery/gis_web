@@ -1,0 +1,38 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
+<meta name="color-scheme" content="dark">
+<title>Карты</title>
+<link rel="icon" href="data:,">
+<link rel="stylesheet" href="/style.css">
+</head>
+<body>
+  <canvas id="map"></canvas>
+
+  <div id="boot">загрузка…</div>
+
+  <div class="hud hud-tl">
+    <span id="zoomLabel">z—</span>
+    <span class="sep"></span>
+    <span id="coords">—</span>
+  </div>
+
+  <div class="hud hud-bl">
+    <div id="scalebar"><div id="scalebarLine"></div><span id="scalebarText"></span></div>
+  </div>
+
+  <div class="hud hud-br" id="status"></div>
+
+  <div class="controls">
+    <button id="zoomIn"  title="Приблизить (+)">+</button>
+    <button id="zoomOut" title="Отдалить (−)">−</button>
+    <button id="home"    title="Показать всё">⤢</button>
+  </div>
+
+  <div id="warn" hidden></div>
+
+  <script src="/app.js"></script>
+</body>
+</html>

@@ -1,0 +1,14 @@
+{
+  "name": "mbtiles-viewer",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Быстрый локальный просмотрщик растровых .mbtiles",
+  "scripts": {
+    "start": "node server.js",
+    "bench": "node tools/bench.js"
+  },
+  "dependencies": {
+    "better-sqlite3": "^13.0.3"
+  }
+}
