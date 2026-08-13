@@ -11,28 +11,91 @@
 <body>
   <canvas id="map"></canvas>
 
-  <div id="boot">загрузка…</div>
+  <!-- Тонкая полоса вверху: единственный индикатор подгрузки тайлов.
+       Счётчик в углу был бы шумом — на HDD он не замолкает. -->
+  <div id="progress" aria-hidden="true"></div>
 
-  <div class="hud hud-tl">
-    <span id="zoomLabel">z—</span>
-    <span class="sep"></span>
-    <span id="coords">—</span>
+  <div id="boot"><span>Загрузка карты</span></div>
+
+  <!-- Показания: где курсор и какой масштаб. Два факта об одном и том же,
+       поэтому живут в одной карточке. -->
+  <div id="readout">
+    <div id="scalebar">
+      <div id="scalebarLine"></div>
+      <span id="scalebarText"></span>
+    </div>
+    <div id="coords"><span id="coordsVal">—</span><span class="z" id="zoomVal"></span></div>
   </div>
 
-  <div class="hud hud-bl">
-    <div id="scalebar"><div id="scalebarLine"></div><span id="scalebarText"></span></div>
+  <!-- Правый борт: лестница зумов и инструменты -->
+  <div class="rail">
+    <div class="pill">
+      <button id="zoomIn" title="Приблизить" aria-label="Приблизить">
+        <svg viewBox="0 0 20 20"><path d="M10 4.2v11.6M4.2 10h11.6"/></svg>
+      </button>
+
+      <div id="ladder" title="Уровень детализации">
+        <div id="ladderTrack">
+          <div id="ladderTicks"></div>
+          <div id="ladderValue"></div>
+        </div>
+      </div>
+
+      <button id="zoomOut" title="Отдалить" aria-label="Отдалить">
+        <svg viewBox="0 0 20 20"><path d="M4.2 10h11.6"/></svg>
+      </button>
+
+      <div class="pill-divider"></div>
+
+      <button id="home" title="Показать всю область" aria-label="Показать всю область">
+        <svg viewBox="0 0 20 20"><path d="M4 7.6V4h3.6M12.4 4H16v3.6M16 12.4V16h-3.6M7.6 16H4v-3.6"/></svg>
+      </button>
+    </div>
+
+    <div class="pill" id="tools">
+      <button data-tool="select" title="Выбор" aria-label="Выбор">
+        <svg viewBox="0 0 20 20"><path d="M5.4 2.9v12.9l3.3-3.2 2 4.3 2.2-1-2-4.2h4.4z" class="fill"/></svg>
+      </button>
+      <button data-tool="marker" title="Метка" aria-label="Метка">
+        <svg viewBox="0 0 20 20"><path d="M10 17.2s5.4-5.6 5.4-9.2a5.4 5.4 0 1 0-10.8 0c0 3.6 5.4 9.2 5.4 9.2z"/><circle cx="10" cy="8" r="2.1"/></svg>
+      </button>
+      <button data-tool="line" title="Линия" aria-label="Линия">
+        <svg viewBox="0 0 20 20"><path d="M4.4 14.2 8.4 8l3.6 2.9 3.6-5.4"/><circle cx="4.4" cy="14.2" r="1.7"/><circle cx="15.6" cy="5.5" r="1.7"/></svg>
+      </button>
+      <button data-tool="polygon" title="Полигон" aria-label="Полигон">
+        <svg viewBox="0 0 20 20"><path d="M10 3.4 16.3 8l-2.4 7.4H6.1L3.7 8z"/></svg>
+      </button>
+
+      <div class="pill-divider"></div>
+
+      <button id="objExport" title="Сохранить объекты в GeoJSON" aria-label="Сохранить объекты">
+        <svg viewBox="0 0 20 20"><path d="M10 3.2v8.4M6.6 8.4 10 11.8l3.4-3.4M3.9 14.4v2.2h12.2v-2.2"/></svg>
+      </button>
+      <button id="objImport" title="Загрузить объекты из GeoJSON" aria-label="Загрузить объекты">
+        <svg viewBox="0 0 20 20"><path d="M10 11.8V3.4M6.6 6.8 10 3.4l3.4 3.4M3.9 14.4v2.2h12.2v-2.2"/></svg>
+      </button>
+      <input type="file" id="objFile" accept=".geojson,.json,application/geo+json" hidden>
+    </div>
   </div>
 
-  <div class="hud hud-br" id="status"></div>
-
-  <div class="controls">
-    <button id="zoomIn"  title="Приблизить (+)">+</button>
-    <button id="zoomOut" title="Отдалить (−)">−</button>
-    <button id="home"    title="Показать всё">⤢</button>
+  <!-- Карточка объекта. Действия — кнопками, а не подсказками про клавиши:
+       про Delete и F2 нужно знать заранее, про кнопку — нет. -->
+  <div id="objinfo" hidden>
+    <div class="obj-text">
+      <div id="objTitle"></div>
+      <div id="objMeta"></div>
+    </div>
+    <div class="obj-actions">
+      <button id="objDone"   class="btn-primary">Готово</button>
+      <button id="objCancel">Отмена</button>
+      <button id="objRename">Переименовать</button>
+      <button id="objDelete" class="btn-danger">Удалить</button>
+    </div>
   </div>
 
   <div id="warn" hidden></div>
 
   <script src="/app.js"></script>
+  <script src="/objects.js"></script>
 </body>
 </html>

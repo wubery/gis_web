@@ -54,6 +54,16 @@ const debug = new URLSearchParams(location.search).has('debug');
 
 const clamp = (v, a, b) => (v < a ? a : v > b ? b : v);
 
+/** Русское склонение после числительного: 1 файл, 2 файла, 5 файлов. */
+function plural(n, one, few, many) {
+  const a = Math.abs(n) % 100;
+  if (a > 10 && a < 20) return many;
+  const b = a % 10;
+  if (b === 1) return one;
+  if (b >= 2 && b <= 4) return few;
+  return many;
+}
+
 const lon2wx = (lon) => (lon + 180) / 360;
 
 function lat2wy(lat) {
@@ -185,6 +195,15 @@ function resize() {
     canvas.height = h;
   }
   dirty = true;
+  if (!cfg) return;
+
+  // Отдалять дальше «вся область плюс запас» бессмысленно: регион
+  // превращается в точку посреди пустого мира. Заодно это делает лестницу
+  // зумов осмысленной — иначе половина её шкалы ушла бы на z0–z7,
+  // где от данных не видно ничего.
+  const fz = fitZoomFor();
+  if (isFinite(fz)) cfg.minViewZoom = Math.max(cfg.absMinZoom, Math.floor(fz) - 1);
+  buildLadder();
 
   // Холст может стартовать нулевым — например, если страницу открыли
   // в фоновой вкладке. Начальный вид тогда считать не из чего (fitBounds
@@ -263,7 +282,7 @@ function render() {
   const H = canvas.height;
 
   ctx.setTransform(1, 0, 0, 1, 0, 0);
-  ctx.fillStyle = '#12151a';
+  ctx.fillStyle = '#1c1c1e';
   ctx.fillRect(0, 0, W, H);
   ctx.imageSmoothingEnabled = true;
   ctx.imageSmoothingQuality = 'low';
@@ -336,8 +355,20 @@ function render() {
 
   if (debug) drawDebugGrid(z, n, size, originX, originY, W, H);
 
+  // Пользовательские объекты рисуются поверх тайлов (см. objects.js).
+  if (typeof drawOverlay === 'function') drawOverlay();
+
   pump();
-  updateHud(z);
+  updateHud();
+}
+
+/** Мировые координаты -> пиксели холста. Нужно objects.js для отрисовки. */
+function worldToCanvas(wx, wy) {
+  const s = TILE * Math.pow(2, view.zoom) * dpr;
+  return {
+    x: (wx - view.wx) * s + canvas.width / 2,
+    y: (wy - view.wy) * s + canvas.height / 2,
+  };
 }
 
 function drawDebugGrid(z, n, size, originX, originY, W, H) {
@@ -385,24 +416,116 @@ function interacted() {
 
 // ── HUD ───────────────────────────────────────────────────────────────────
 
-const zoomLabel = document.getElementById('zoomLabel');
-const coordsEl = document.getElementById('coords');
-const statusEl = document.getElementById('status');
+const coordsVal = document.getElementById('coordsVal');
+const zoomVal = document.getElementById('zoomVal');
+const progressEl = document.getElementById('progress');
 const scalebarLine = document.getElementById('scalebarLine');
 const scalebarText = document.getElementById('scalebarText');
 
 let cursorLL = null;
 
-function updateHud(z) {
-  zoomLabel.textContent = 'z' + view.zoom.toFixed(1) + (z !== Math.round(view.zoom) ? ' ↑' : '');
-
+function updateHud() {
   const ll = cursorLL ?? { lat: wy2lat(view.wy), lon: wx2lon(view.wx) };
-  coordsEl.textContent = ll.lat.toFixed(5) + ', ' + ll.lon.toFixed(5);
+  const text = ll.lat.toFixed(5) + ', ' + ll.lon.toFixed(5);
+  if (coordsVal.textContent !== text) coordsVal.textContent = text;
 
-  const pending = queue.length + active;
-  statusEl.textContent = pending > 0 ? '↓ ' + pending : debug ? tiles.size + ' в кэше' : '';
+  const z = 'зум ' + view.zoom.toFixed(1);
+  if (zoomVal.textContent !== z) zoomVal.textContent = z;
+
+  // Счётчик оставшихся тайлов был бы шумом: на HDD он почти не замолкает.
+  // Достаточно знать, идёт загрузка или нет.
+  progressEl.classList.toggle('active', queue.length + active > 0);
 
   updateScalebar();
+  updateLadder();
+}
+
+// ── Лестница зумов ────────────────────────────────────────────────────────
+//
+// Зум растровой карты — не плавная величина, а лестница готовых пирамид.
+// Штрих на уровень: сплошной там, где тайлы есть, полый выше cfg.maxzoom,
+// где картинки уже нет и она просто растягивается. Эту границу иначе
+// никак не видно, а знать про неё важно — за ней подробностей не прибавится.
+
+const ladderEl = document.getElementById('ladder');
+const ladderTicks = document.getElementById('ladderTicks');
+const ladderValue = document.getElementById('ladderValue');
+
+let ladderLevels = [];
+let ladderRange = '';
+let ladderMark = '';
+let ladderDrag = false;
+
+function buildLadder() {
+  const lo = Math.ceil(cfg.minViewZoom);
+  const hi = Math.floor(cfg.maxViewZoom);
+  const range = lo + ':' + hi + ':' + cfg.maxzoom;
+  if (range === ladderRange) return;
+  ladderRange = range;
+
+  ladderLevels = [];
+  ladderTicks.textContent = '';
+  for (let z = lo; z <= hi; z++) {
+    const el = document.createElement('div');
+    // column-reverse у трека: первый добавленный штрих оказывается внизу.
+    el.className = z > cfg.maxzoom ? 'tick over' : 'tick';
+    ladderTicks.appendChild(el);
+    ladderLevels.push(z);
+  }
+  ladderMark = '';
+}
+
+function updateLadder() {
+  if (ladderLevels.length === 0) return;
+
+  // Классы трогаем, только когда зум действительно изменился: иначе
+  // каждое движение мыши гоняло бы пересчёт стилей на всех штрихах.
+  const mark = view.zoom.toFixed(2);
+  if (mark === ladderMark) return;
+  ladderMark = mark;
+
+  const now = Math.round(view.zoom);
+  const nodes = ladderTicks.children;
+  for (let i = 0; i < nodes.length; i++) {
+    const z = ladderLevels[i];
+    nodes[i].classList.toggle('reached', z <= view.zoom + 0.001);
+    nodes[i].classList.toggle('now', z === now);
+  }
+  ladderValue.textContent = 'зум ' + view.zoom.toFixed(1);
+}
+
+/** Тянем лестницу — зумим относительно центра экрана. */
+function ladderSeek(clientY) {
+  const r = ladderTicks.parentElement.getBoundingClientRect();
+  if (r.height === 0) return;
+  const lo = ladderLevels[0];
+  const hi = ladderLevels[ladderLevels.length - 1];
+  const t = clamp(1 - (clientY - r.top) / r.height, 0, 1);
+  anim = null;
+  inertia = null;
+  view.zoom = clamp(lo + t * (hi - lo), cfg.minViewZoom, cfg.maxViewZoom);
+  clampView();
+  interacted();
+}
+
+ladderEl.addEventListener('pointerdown', (e) => {
+  if (!cfg) return;
+  ladderEl.setPointerCapture(e.pointerId);
+  ladderDrag = true;
+  ladderValue.classList.add('on');
+  ladderSeek(e.clientY);
+  e.preventDefault();
+});
+
+ladderEl.addEventListener('pointermove', (e) => {
+  if (ladderDrag) ladderSeek(e.clientY);
+});
+
+for (const ev of ['pointerup', 'pointercancel']) {
+  ladderEl.addEventListener(ev, () => {
+    ladderDrag = false;
+    ladderValue.classList.remove('on');
+  });
 }
 
 function updateScalebar() {
@@ -421,6 +544,12 @@ function updateScalebar() {
 const pointers = new Map();
 let pinch = null;
 let vel = null;
+/**
+ * Сколько палец проехал с момента нажатия. Нужно, чтобы отличить клик
+ * (постановка точки) от перетаскивания карты: в режиме рисования должно
+ * работать и то, и другое.
+ */
+let press = null;
 
 canvas.addEventListener('pointerdown', (e) => {
   canvas.setPointerCapture(e.pointerId);
@@ -430,6 +559,7 @@ canvas.addEventListener('pointerdown', (e) => {
   inertia = null;
   vel = { x: 0, y: 0, t: performance.now() };
   pinch = pointers.size === 2 ? pinchState() : null;
+  press = pointers.size === 1 ? { x: e.clientX, y: e.clientY, moved: 0 } : null;
   interacted();
 });
 
@@ -441,12 +571,21 @@ canvas.addEventListener('pointermove', (e) => {
     // Просто наведение — показываем координаты под курсором.
     const w = screenToWorld(e.clientX - rect.left, e.clientY - rect.top);
     cursorLL = { lat: wy2lat(w.wy), lon: wx2lon(w.wx) };
-    updateHud(Math.round(view.zoom));
+    if (typeof overlayHover === 'function') {
+      overlayHover(e.clientX - rect.left, e.clientY - rect.top);
+    }
+    updateHud();
     return;
   }
 
   const prev = pointers.get(e.pointerId);
   pointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
+  if (press) {
+    press.moved = Math.max(
+      press.moved,
+      Math.hypot(e.clientX - press.x, e.clientY - press.y)
+    );
+  }
 
   if (pointers.size >= 2) {
     const now = pinchState();
@@ -493,6 +632,7 @@ function pinchState() {
 }
 
 function endPointer(e) {
+  const wasClick = press !== null && press.moved < 6 && pointers.size === 1;
   pointers.delete(e.pointerId);
   if (pointers.size < 2) pinch = null;
   if (pointers.size === 0) {
@@ -502,6 +642,12 @@ function endPointer(e) {
       dirty = true;
     }
     vel = null;
+    press = null;
+  }
+  // Карту не тащили — значит это клик по объекту или постановка точки.
+  if (wasClick && e.type === 'pointerup' && typeof overlayClick === 'function') {
+    const rect = canvas.getBoundingClientRect();
+    overlayClick(e.clientX - rect.left, e.clientY - rect.top);
   }
   interacted();
 }
@@ -528,6 +674,8 @@ canvas.addEventListener(
 );
 
 canvas.addEventListener('dblclick', (e) => {
+  // В режиме рисования двойной клик завершает фигуру, а не зумит.
+  if (typeof overlayDblClick === 'function' && overlayDblClick()) return;
   const rect = canvas.getBoundingClientRect();
   const step = e.shiftKey ? -1 : 1;
   zoomTo((anim ? anim.to : view.zoom) + step, e.clientX - rect.left, e.clientY - rect.top);
@@ -558,6 +706,10 @@ document.getElementById('home').onclick = () => {
 
 window.addEventListener('keydown', (e) => {
   if (e.target !== document.body && e.target !== canvas) return;
+  if (typeof overlayKey === 'function' && overlayKey(e)) {
+    e.preventDefault();
+    return;
+  }
   const pan = 120 / worldScale();
   switch (e.key) {
     case '+': case '=': zoomCenter(1); break;
@@ -611,17 +763,21 @@ function readHash() {
   return true;
 }
 
+/** Зум, при котором вся покрытая область помещается в окно. NaN, если рано. */
+function fitZoomFor() {
+  const b = cfg.bounds;
+  const w = Math.abs(lon2wx(b[2]) - lon2wx(b[0]));
+  const h = Math.abs(lat2wy(b[1]) - lat2wy(b[3]));
+  if (!(cssW > 0 && cssH > 0 && w > 0 && h > 0)) return NaN;
+  return Math.min(Math.log2(cssW / (TILE * w)), Math.log2(cssH / (TILE * h)));
+}
+
 function fitBounds() {
   const b = cfg.bounds;
   view.wx = (lon2wx(b[0]) + lon2wx(b[2])) / 2;
   view.wy = (lat2wy(b[1]) + lat2wy(b[3])) / 2;
-  if (cssW > 0 && cssH > 0) {
-    const w = Math.abs(lon2wx(b[2]) - lon2wx(b[0]));
-    const h = Math.abs(lat2wy(b[1]) - lat2wy(b[3]));
-    const zx = Math.log2(cssW / (TILE * w));
-    const zy = Math.log2(cssH / (TILE * h));
-    view.zoom = Math.min(zx, zy);
-  }
+  const fz = fitZoomFor();
+  if (isFinite(fz)) view.zoom = fz;
   clampView();
 }
 
@@ -643,7 +799,10 @@ async function main() {
     // Дальше maxzoom тайлов нет, но растянуть их ещё вдвое-вчетверо полезно:
     // на спутниковом снимке так удобнее разглядывать мелкие детали.
     maxViewZoom: info.maxzoom + OVERZOOM,
+    // minViewZoom подтягивается под размер окна в resize(); absMinZoom —
+    // жёсткий пол, ниже которого не опускаемся никогда.
     minViewZoom: info.minzoom,
+    absMinZoom: info.minzoom,
   };
 
   // resize() сам выставит начальный вид, как только узнает размер холста.
@@ -651,12 +810,12 @@ async function main() {
 
   if (info.filesPending > 0) {
     const warn = document.getElementById('warn');
-    const names = info.pending
-      .map((p) => p.name.replace(/\.mbtiles$/i, '') + (p.progress ? ` — ${(p.progress * 100).toFixed(0)}%` : ''))
-      .slice(0, 4)
-      .join('\n');
+    const n = info.filesPending;
+    // Говорим, что происходит и что делать не нужно. Список имён файлов
+    // тут ничего не решает — счётчика достаточно.
     warn.textContent =
-      `Ещё копируется файлов: ${info.filesPending}. Часть карты пока пустая.\n` + names;
+      `Копируется ещё ${n} ${plural(n, 'файл', 'файла', 'файлов')}. ` +
+      'Часть области пока без снимков — они появятся сами, перезагружать не нужно.';
     warn.hidden = false;
     setTimeout(() => (warn.hidden = true), 12000);
   }
@@ -677,5 +836,9 @@ async function main() {
 }
 
 main().catch((err) => {
-  document.getElementById('boot').textContent = 'Не удалось запуститься: ' + err.message;
+  // Текст ошибки от браузера пришёл бы по-английски — его в консоль,
+  // пользователю остаётся то, что можно сделать.
+  console.error(err);
+  document.getElementById('boot').textContent =
+    'Сервер карт не отвечает. Проверьте, запущен ли он, и обновите страницу.';
 });

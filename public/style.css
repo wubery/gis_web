@@ -1,9 +1,51 @@
+/*
+ * Светлое стекло поверх тёмного снимка.
+ *
+ * Интерфейс лежит на фотографии, а не на пустом фоне, поэтому все панели —
+ * полупрозрачный материал с блюром и подъёмом насыщенности: подложка
+ * подхватывает цвет снимка под собой и не выглядит наклейкой.
+ */
+
 :root {
-  --bg: #12151a;
-  --panel: rgba(18, 21, 26, 0.82);
-  --line: rgba(255, 255, 255, 0.16);
-  --text: #e8ecf1;
-  --muted: #9aa6b4;
+  /* Чернила */
+  --ink:    #1d1d1f;
+  --ink-2:  #6e6e73;
+  --ink-3:  #a1a1a6;
+
+  --accent: #0071e3;
+  --danger: #ff3b30;
+
+  --sep:    rgba(0, 0, 0, 0.09);
+  --hover:  rgba(0, 0, 0, 0.05);
+
+  /* Материал панелей */
+  --material: rgba(255, 255, 255, 0.72);
+  --material-solid: rgba(255, 255, 255, 0.94);
+  --blur: saturate(180%) blur(24px);
+
+  /* Фон там, где тайлов нет. Нейтральный тёмный, чтобы дыры в данных
+     не били по глазам вспышкой при панорамировании. */
+  --void: #1c1c1e;
+
+  --r-group: 14px;
+  --r-btn: 9px;
+  --r-card: 15px;
+
+  /* Волосяная обводка + мягкая тень: над фотографией без них панель
+     теряет края на светлых участках снимка. */
+  --lift:
+    0 0 0 0.5px rgba(0, 0, 0, 0.05),
+    0 2px 6px rgba(0, 0, 0, 0.10),
+    0 12px 32px rgba(0, 0, 0, 0.20);
+
+  --sans: -apple-system, BlinkMacSystemFont, "SF Pro Text",
+          "Segoe UI Variable Text", "Segoe UI", system-ui, sans-serif;
+  /* Только для координат: они меняются на каждом движении мыши, и в
+     пропорциональном наборе цифры дёргали бы строку по ширине. */
+  --mono: ui-monospace, "SF Mono", "Cascadia Mono", "Segoe UI Mono",
+          Consolas, monospace;
+
+  --ease: cubic-bezier(0.32, 0.72, 0, 1);
 }
 
 * { box-sizing: border-box; }
@@ -12,10 +54,12 @@ html, body {
   margin: 0;
   height: 100%;
   overflow: hidden;
-  background: var(--bg);
-  color: var(--text);
-  font: 13px/1.4 ui-monospace, "Cascadia Mono", Consolas, monospace;
+  background: var(--void);
+  color: var(--ink);
+  font: 400 13px/1.35 var(--sans);
+  letter-spacing: -0.005em;
   -webkit-text-size-adjust: 100%;
+  -webkit-font-smoothing: antialiased;
 }
 
 #map {
@@ -25,7 +69,6 @@ html, body {
   height: 100%;
   display: block;
   cursor: grab;
-  /* Браузер не должен сам обрабатывать жесты — панорамирование и пинч наши. */
   touch-action: none;
   user-select: none;
   -webkit-user-select: none;
@@ -34,116 +77,429 @@ html, body {
 
 #map.dragging { cursor: grabbing; }
 
-/* ── Панельки ───────────────────────────────────────────────────────────── */
+/* ── Общий материал панелей ─────────────────────────────────────────────── */
 
-.hud {
+.pill,
+#readout,
+#objinfo,
+#warn {
+  background: var(--material);
+  -webkit-backdrop-filter: var(--blur);
+  backdrop-filter: var(--blur);
+  box-shadow: var(--lift);
+}
+
+/* ── Индикатор подгрузки ────────────────────────────────────────────────── */
+
+#progress {
   position: fixed;
-  z-index: 10;
-  padding: 6px 10px;
-  background: var(--panel);
-  border: 1px solid var(--line);
-  border-radius: 7px;
-  backdrop-filter: blur(8px);
-  -webkit-backdrop-filter: blur(8px);
+  z-index: 40;
+  top: 0;
+  left: 0;
+  height: 2px;
+  width: 100%;
+  opacity: 0;
+  transition: opacity 260ms var(--ease);
   pointer-events: none;
-  white-space: nowrap;
 }
 
-.hud-tl { top: 10px; left: 10px; }
-.hud-bl { bottom: 10px; left: 10px; padding: 5px 9px; }
-.hud-br { bottom: 10px; right: 10px; color: var(--muted); }
-.hud-br:empty { display: none; }
-
-.sep {
-  display: inline-block;
-  width: 1px;
-  height: 11px;
-  margin: 0 8px;
-  vertical-align: -1px;
-  background: var(--line);
+#progress::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(90deg,
+    transparent, var(--accent) 38%, var(--accent) 62%, transparent);
+  transform: translateX(-100%);
 }
 
-#coords { color: var(--muted); }
-#zoomLabel { font-weight: 600; }
+#progress.active { opacity: 1; }
+#progress.active::after { animation: sweep 1.15s linear infinite; }
 
-/* ── Масштабная линейка ─────────────────────────────────────────────────── */
+@keyframes sweep {
+  to { transform: translateX(100%); }
+}
 
-#scalebar { display: flex; align-items: center; gap: 8px; }
+/* ── Показания: масштаб, координаты, зум ────────────────────────────────── */
+
+/* Слева сверху, как масштабная линейка в Apple Maps: снизу по центру
+   карточка объекта, и показания там жались бы к ней. */
+#readout {
+  position: fixed;
+  z-index: 20;
+  top: 20px;
+  left: 20px;
+  padding: 10px 14px 11px;
+  border-radius: var(--r-card);
+  pointer-events: none;
+  animation: enter-left 460ms var(--ease) 120ms both;
+}
+
+#scalebar {
+  display: flex;
+  align-items: flex-end;
+  gap: 9px;
+  margin-bottom: 7px;
+}
 
 #scalebarLine {
-  height: 8px;
-  border: 1px solid var(--text);
+  height: 7px;
+  border: 1.5px solid var(--ink);
   border-top: none;
-  transition: width 90ms linear;
+  border-radius: 0 0 1px 1px;
+  transition: width 120ms var(--ease);
 }
 
-#scalebarText { color: var(--muted); }
+#scalebarText {
+  font-size: 12px;
+  font-weight: 600;
+  line-height: 1;
+  color: var(--ink);
+  font-variant-numeric: tabular-nums;
+}
 
-/* ── Кнопки ─────────────────────────────────────────────────────────────── */
+#coords {
+  font-family: var(--mono);
+  font-size: 12px;
+  letter-spacing: -0.02em;
+  color: var(--ink-2);
+}
 
-.controls {
+#coords .z {
+  margin-left: 10px;
+  padding-left: 10px;
+  border-left: 1px solid var(--sep);
+  color: var(--ink-3);
+}
+
+/* ── Правый борт ────────────────────────────────────────────────────────── */
+
+.rail {
   position: fixed;
-  z-index: 10;
-  top: 10px;
-  right: 10px;
+  z-index: 20;
+  top: 20px;
+  right: 20px;
   display: flex;
   flex-direction: column;
-  gap: 6px;
+  gap: 12px;
+  animation: enter-right 460ms var(--ease) 120ms both;
 }
 
-.controls button {
-  width: 36px;
+/* Один короткий вход на загрузке: панели приезжают со своих краёв,
+   пока проступает карта. Больше движения интерфейсу карты не нужно —
+   двигаться должна карта. */
+@keyframes enter-right {
+  from { opacity: 0; transform: translateX(14px); }
+  to   { opacity: 1; transform: none; }
+}
+
+@keyframes enter-left {
+  from { opacity: 0; transform: translateX(-14px); }
+  to   { opacity: 1; transform: none; }
+}
+
+.pill {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  padding: 4px;
+  border-radius: var(--r-group);
+}
+
+.pill button {
+  display: grid;
+  place-items: center;
+  width: 38px;
   height: 36px;
-  font: inherit;
-  font-size: 17px;
-  line-height: 1;
-  color: var(--text);
-  background: var(--panel);
-  border: 1px solid var(--line);
-  border-radius: 7px;
-  backdrop-filter: blur(8px);
-  -webkit-backdrop-filter: blur(8px);
+  padding: 0;
+  color: var(--ink);
+  background: none;
+  border: 0;
+  border-radius: var(--r-btn);
   cursor: pointer;
-  touch-action: manipulation;
+  transition: background 140ms var(--ease), color 140ms var(--ease);
 }
 
-.controls button:hover { background: rgba(40, 46, 56, 0.9); }
-.controls button:active { transform: translateY(1px); }
+.pill button:hover { background: var(--hover); }
+.pill button:active { background: rgba(0, 0, 0, 0.09); }
 
-/* ── Служебное ──────────────────────────────────────────────────────────── */
+.pill button svg {
+  width: 20px;
+  height: 20px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.6;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.pill button svg .fill {
+  fill: currentColor;
+  stroke-width: 1.1;
+  stroke-linejoin: round;
+}
+
+.pill button.active {
+  color: #fff;
+  background: var(--accent);
+}
+
+.pill button.active:hover { background: #0067cf; }
+
+.pill-divider {
+  width: 22px;
+  height: 1px;
+  margin: 3px 0;
+  background: var(--sep);
+}
+
+/* ── Лестница зумов ─────────────────────────────────────────────────────── */
+
+#ladder {
+  padding: 7px 0 8px;
+  cursor: pointer;
+  touch-action: none;
+}
+
+#ladderTrack {
+  position: relative;
+  display: flex;
+  flex-direction: column-reverse;
+  align-items: center;
+  gap: 5px;
+}
+
+/* Штрих = один уровень пирамиды. Сплошной — родные тайлы есть.
+   Полый — дальше данных нет и картинка просто растягивается. */
+#ladderTicks { display: contents; }
+
+.tick {
+  width: 14px;
+  height: 2px;
+  border-radius: 1px;
+  background: rgba(0, 0, 0, 0.13);
+  transition: width 160ms var(--ease), background 160ms var(--ease);
+}
+
+/* Пройденные уровни заливаются в полный цвет: при полупрозрачной заливке
+   лестница читалась как индикатор сигнала, а не как шкала. */
+.tick.reached { background: var(--accent); }
+
+.tick.over {
+  background: none;
+  box-shadow: inset 0 0 0 1px rgba(0, 0, 0, 0.2);
+}
+
+.tick.over.reached { box-shadow: inset 0 0 0 1.5px var(--accent); }
+
+.tick.now {
+  width: 22px;
+  height: 3px;
+  background: var(--ink);
+  box-shadow: none;
+}
+
+/* Текущий уровень — тёмная засечка, как стрелка на шкале.
+   В зоне растяжения она остаётся полой: данных там всё равно нет. */
+.tick.over.now {
+  background: none;
+  box-shadow: inset 0 0 0 1.5px var(--ink);
+}
+
+/* Плашка с числом — только пока тянут лестницу. */
+#ladderValue {
+  position: absolute;
+  right: 100%;
+  margin-right: 12px;
+  padding: 3px 8px;
+  border-radius: 7px;
+  background: var(--ink);
+  color: #fff;
+  font-size: 11.5px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+  opacity: 0;
+  transform: translateX(4px);
+  transition: opacity 140ms var(--ease), transform 140ms var(--ease);
+  pointer-events: none;
+}
+
+/* На наведении тоже показываем число: иначе неочевидно, что лестницу
+   можно не только разглядывать, но и тянуть. */
+#ladderValue.on,
+#ladder:hover #ladderValue { opacity: 1; transform: translateX(0); }
+
+#ladder:hover .tick { width: 17px; }
+#ladder:hover .tick.now { width: 22px; }
+
+/* ── Карточка объекта ───────────────────────────────────────────────────── */
+
+#objinfo {
+  position: fixed;
+  z-index: 20;
+  bottom: 20px;
+  left: 50%;
+  display: flex;
+  align-items: center;
+  gap: 18px;
+  max-width: min(560px, calc(100vw - 40px));
+  padding: 11px 12px 11px 16px;
+  border-radius: var(--r-card);
+  transform: translateX(-50%);
+  animation: card-in 260ms var(--ease);
+}
+
+#objinfo[hidden] { display: none; }
+
+@keyframes card-in {
+  from { opacity: 0; transform: translate(-50%, 8px); }
+  to   { opacity: 1; transform: translate(-50%, 0); }
+}
+
+.obj-text { min-width: 0; }
+
+#objTitle {
+  font-size: 15px;
+  font-weight: 600;
+  letter-spacing: -0.015em;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+#objMeta {
+  margin-top: 1px;
+  font-size: 12px;
+  color: var(--ink-2);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.obj-actions {
+  display: flex;
+  gap: 6px;
+  margin-left: auto;
+}
+
+.obj-actions button {
+  padding: 7px 13px;
+  font: 500 12.5px/1 var(--sans);
+  letter-spacing: -0.005em;
+  color: var(--ink);
+  background: rgba(0, 0, 0, 0.055);
+  border: 0;
+  border-radius: 980px;
+  cursor: pointer;
+  white-space: nowrap;
+  transition: background 140ms var(--ease), color 140ms var(--ease);
+}
+
+.obj-actions button:hover { background: rgba(0, 0, 0, 0.1); }
+.obj-actions button[hidden] { display: none; }
+
+.obj-actions .btn-primary {
+  color: #fff;
+  background: var(--accent);
+}
+
+.obj-actions .btn-primary:hover { background: #0067cf; }
+
+.obj-actions .btn-danger { color: var(--danger); }
+
+.obj-actions .btn-danger:hover { background: rgba(255, 59, 48, 0.12); }
+
+.obj-actions button:disabled {
+  color: var(--ink-3);
+  background: rgba(0, 0, 0, 0.045);
+  cursor: default;
+}
+
+/* ── Заставка и предупреждение ──────────────────────────────────────────── */
 
 #boot {
   position: fixed;
-  z-index: 20;
+  z-index: 50;
   inset: 0;
   display: grid;
   place-items: center;
-  color: var(--muted);
-  background: var(--bg);
+  background: var(--void);
+  color: var(--ink-3);
+  font-size: 13.5px;
+  letter-spacing: 0.01em;
+  transition: opacity 400ms var(--ease);
 }
 
-#boot.gone { display: none; }
+#boot.gone { opacity: 0; pointer-events: none; }
 
 #warn {
   position: fixed;
-  z-index: 15;
-  top: 10px;
+  z-index: 30;
+  top: 20px;
   left: 50%;
-  max-width: min(520px, calc(100vw - 120px));
-  padding: 7px 12px;
+  max-width: min(460px, calc(100vw - 130px));
+  padding: 10px 15px;
+  border-radius: var(--r-card);
   transform: translateX(-50%);
-  color: #ffd9a8;
-  background: rgba(74, 52, 22, 0.9);
-  border: 1px solid rgba(255, 190, 110, 0.35);
-  border-radius: 7px;
-  backdrop-filter: blur(8px);
-  -webkit-backdrop-filter: blur(8px);
+  font-size: 12.5px;
+  line-height: 1.45;
+  color: var(--ink-2);
   white-space: pre-line;
+  animation: card-in 300ms var(--ease);
 }
 
 #warn[hidden] { display: none; }
+#warn b { color: var(--ink); font-weight: 600; }
 
-@media (max-width: 600px) {
-  .hud-br { display: none; }
-  #warn { max-width: calc(100vw - 110px); font-size: 12px; }
+/* ── Доступность ────────────────────────────────────────────────────────── */
+
+:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+.pill button:focus-visible { outline-offset: -1px; }
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+  /* Полоса загрузки без анимации бесполезна — оставляем ровную заливку. */
+  #progress.active::after { transform: none; background: var(--accent); }
+}
+
+/* ── Узкий экран ────────────────────────────────────────────────────────── */
+
+/* Невысокое окно: лестница — первое, чем жертвуем, иначе борт с
+   инструментами уезжает за нижний край. Кнопки зума остаются. */
+@media (max-height: 560px) {
+  #ladder { display: none; }
+  .pill:first-child .pill-divider { display: none; }
+}
+
+@media (max-width: 620px) {
+  .rail { top: 14px; right: 14px; gap: 9px; }
+  #readout { top: 14px; left: 14px; padding: 8px 11px 9px; }
+
+  /* Карточка объекта на телефоне уезжает вниз на всю ширину: снизу
+     по центру она столкнулась бы с показаниями. */
+  #objinfo {
+    left: 14px;
+    right: 14px;
+    bottom: 14px;
+    max-width: none;
+    flex-direction: column;
+    align-items: stretch;
+    gap: 10px;
+    transform: none;
+    animation: none;
+  }
+  #objinfo .obj-actions { margin-left: 0; }
+  #objinfo .obj-actions button { flex: 1; padding: 9px 10px; }
+
+  /* Показания уже вверху слева — предупреждение уводим под них. */
+  #warn { top: 84px; max-width: calc(100vw - 92px); }
 }
