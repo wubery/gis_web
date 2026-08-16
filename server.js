@@ -42,7 +42,15 @@ let indexFingerprint;
 
 function reloadIndex(reason) {
   const t0 = Date.now();
-  const { index: idx, fromCache } = loadIndex(CONFIG.mapsDir, CACHE_FILE);
+
+  // Ход сборки показываем только на старте. При пересканировании это был бы
+  // шум: оно повторяется раз в минуту, пока копируются файлы.
+  const onProgress =
+    reason === 'старт'
+      ? (stage, i, n, name) => console.log(`[индекс] ${stage} ${i}/${n}  ${name}`)
+      : undefined;
+
+  const { index: idx, fromCache } = loadIndex(CONFIG.mapsDir, CACHE_FILE, onProgress);
   index = idx;
   indexFingerprint = fingerprint(CONFIG.mapsDir);
 
@@ -339,6 +347,19 @@ if (index.skipped.length > 0 && CONFIG.rescanMs > 0) {
 // на каждую пачку — заметная доля времени отклика в локальной сети.
 server.keepAliveTimeout = 60_000;
 server.headersTimeout = 65_000;
+
+// Без этого занятый порт вылетает необработанным событием 'error' —
+// человек видит стек вызовов вместо причины.
+server.on('error', (err) => {
+  if (err.code === 'EADDRINUSE') {
+    console.error(`\nПорт ${CONFIG.port} уже занят — похоже, просмотрщик уже запущен.`);
+    console.error('Закройте то окно либо запустите на другом порту:\n');
+    console.error(`    set PORT=8081 && ЗАПУСТИТЬ.bat\n`);
+  } else {
+    console.error('\n[сервер] не удалось запуститься:', err.message, '\n');
+  }
+  process.exit(1);
+});
 
 server.listen(CONFIG.port, CONFIG.host, () => {
   const addrs = ['localhost'];
