@@ -1,4 +1,4 @@
-<#
+﻿<#
     Сборка автономного комплекта для компьютера без интернета.
 
     Складывает в одну папку программу, зависимости и портативный node.exe.
@@ -14,12 +14,19 @@
 #>
 [CmdletBinding()]
 param(
-  [string]$Dest = (Join-Path (Split-Path $PSScriptRoot -Parent) '..\Просмотр карт'),
+  [string]$Dest,
   [switch]$Zip
 )
 
 $ErrorActionPreference = 'Stop'
-$src = Split-Path $PSScriptRoot -Parent
+
+# Путь считаем в теле, а не в значении параметра по умолчанию: в блоке param
+# $PSScriptRoot ещё пуст, и Split-Path падал на пустой строке.
+$here = $PSScriptRoot
+if (-not $here) { $here = Split-Path $MyInvocation.MyCommand.Path -Parent }
+$src = Split-Path $here -Parent
+
+if (-not $Dest) { $Dest = Join-Path (Split-Path $src -Parent) 'Просмотр карт' }
 $Dest = [IO.Path]::GetFullPath($Dest)
 $app = Join-Path $Dest 'app'
 
